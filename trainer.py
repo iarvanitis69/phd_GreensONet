@@ -3,12 +3,17 @@ sys.path.append("../external-libraries")
 import paddle
 import os
 import time
-from model import Net_Integral
+import numpy as np
+from model import Net_Integral, empty_context_manager
 from utils import Mesh
 from Inference import VTK_Dataset
+from problem import DiffusionReaction, Poisson, Stokes
+import hydra
+import logging
+log = logging.getLogger(__name__)
+
 
 class Trainer(object):
-
     def __init__(self, args):
         self.args = args
         self.cuda_index = args.cuda_index
@@ -34,24 +39,32 @@ class Trainer(object):
         self.lam = self.args.lam
         self.lr = self.args.lr
         self.net_pde = Net_Integral(self.args.layers, args.shape, self.ngs_boundary, self.ngs_interior, self.problem)
+        if self.args.resume:
+            log.info(f'Resuming training, loading {args.resume} ...')
+            for i in range(self.args.shape[0]):
+                for j in range(self.args.shape[1]):
+                    if self.args.resume[j].endswith("pdparams"):
+                        state_dict = paddle.load(path=str(self.args.resume[j]))
+                    elif self.args.resume[j].endswith("npy"):
+                        checkpoint = np.load(str(self.args.resume[j]), allow_pickle=True).item()
+                        # self.net_pde.G[i][j]
+                        state_dict = {}
+                        state_dict['layers_list.0.weight'] = checkpoint['0']
+                        state_dict['layers_list.0.bias'] = checkpoint['1'].reshape(-1)
+                        state_dict['layers_list.1.weight'] = checkpoint['2']
+                        state_dict['layers_list.1.bias'] = checkpoint['3'].reshape(-1)
+                        state_dict['layers_list.2.weight'] = checkpoint['4']
+                        state_dict['layers_list.2.bias'] = checkpoint['5'].reshape(-1)
+                        state_dict['layers_list.3.weight'] = checkpoint['6']
+                        state_dict['layers_list.3.bias'] = checkpoint['7'].reshape(-1)
+                        state_dict = {k:paddle.to_tensor(v, dtype="float32") for k, v in state_dict.items()}
+                    self.net_pde.G[i][j].set_state_dict(state_dict)
+                    self.net_pde.G[i][j].eval()
+        else:
+            pass
 
     def get_mesh_path(self, mesh_path, boundary_mesh_path):
         return mesh_path, boundary_mesh_path
-
-    def _model_path(self):
-        """ Create directory of saved model"""
-        if not os.path.exists('checkpoints'):
-            os.mkdir('checkpoints')
-        pde = os.path.join('checkpoints', f'{self.pde_case}')
-        if not os.path.exists(pde):
-            os.mkdir(pde)
-        geo = os.path.join('checkpoints', f'{self.pde_case}',
-            f'{self.geo_type}')
-        if not os.path.exists(geo):
-            os.mkdir(geo)
-        model_path = os.path.join('checkpoints', f'{self.pde_case}',
-            f'{self.geo_type}')
-        return model_path
 
     def train(self):
         if not isinstance(self.mesh.X_boundary['normal'], paddle.Tensor):
@@ -78,28 +91,16 @@ class Trainer(object):
                 out_35.stop_gradient = not True
                 self.mesh.X_boundary['wts'][k] = out_35
         for K in range(len(self.mesh.blocks)):
-            if self.mesh.z_blocks[K] is not None and len(self.mesh.z_blocks[K]
-                ) > 0:
-                if not isinstance(self.mesh.z_blocks[K]['coord'], paddle.Tensor
-                    ):
+            print("\nblock", K)
+            if self.mesh.z_blocks[K] is not None and len(self.mesh.z_blocks[K]) > 0:
+                if not isinstance(self.mesh.z_blocks[K]['coord'], paddle.Tensor):
                     self.mesh.z_blocks[K]['coord'] = paddle.to_tensor(data=
-                        self.mesh.z_blocks[K]['coord']).astype(dtype='float32'
-                        ).to(self.device)
+                        self.mesh.z_blocks[K]['coord']).astype(dtype='float32')
                 self.train_block(K)
             else:
-                print(f'Block #{K} is empty!!!')
+                log.info(f'Block #{K} is empty!!!')
 
     def train_block(self, k):
-        if self.resume:
-            resume_path = os.path.join('checkpoints', f'block{k}_0.pdparams')
-            if os.path.isfile(resume_path):
-                print(f'Resuming training, loading {resume_path} ...')
-                for i in range(self.args.shape[0]):
-                    for j in range(self.args.shape[1]):
-                        checkpoint = paddle.load(path=str(self.model_path[j]))
-                        self.net_pde.G[i][j].set_state_dict(checkpoint)
-            else:
-                raise
         for i in range(self.args.shape[0]):
             for j in range(self.args.shape[1]):
                 self.net_pde.G[i][j].train()
@@ -110,23 +111,27 @@ class Trainer(object):
             param.stop_gradient) == True]
         self.optimizer_Adam = paddle.optimizer.Adam(parameters=params,
             learning_rate=self.lr, weight_decay=0.0)
-        tmp_lr = paddle.optimizer.lr.StepDecay(step_size=100, gamma=0.9,
-            learning_rate=self.optimizer_Adam.get_lr())
-        self.optimizer_Adam.set_lr_scheduler(tmp_lr)
-        self.lr_scheduler = tmp_lr
-        best_loss = 10000000000.0
-        print(f'Start Trainning (blocks #{k})')
+        if self.args.lr_scheduler == "StepDecay":
+            self.lr_scheduler = paddle.optimizer.lr.StepDecay(
+                step_size=self.args.lr_scheduler_step_size,
+                gamma=0.9,
+                learning_rate=self.optimizer_Adam.get_lr())
+            self.optimizer_Adam.set_lr_scheduler(self.lr_scheduler)
+        elif self.args.lr_scheduler == "const":
+            self.lr_scheduler = None
+        else:
+            raise ValueError(f"Unknown lr scheduler type: {self.args.lr_scheduler}")
+        best_train_loss = 1.0
+        log.info(f'Start Trainning (blocks #{k})')
         tt = time.time()
-        output_file = open(os.path.join(f'output_{k}.txt'), 'w+')
         train_dataset = VTK_Dataset(self.args, self.mesh, self.problem, self.train_samples)
-        
+
         for epoch in range(self.epochs_Adam):
             train_loss = 0
             total_loss = 0
             for data in train_dataset:
                 x_in_coord_list, x_in_wts_list, x_bc_coord_list, x_bc_wts_list, f_interior_list, g_boundary_list, a_boundary_list, z_blocks, case_index, x_bc_normal = data 
                 coord = z_blocks[k]['coord']
-                # print("\nTrainning: the test cases ID: ", case_index)
                 self.optimizer_Adam.clear_gradients(set_to_zero=False)
                 u_pred = self.net_pde(
                     x_in_coord_list, 
@@ -148,33 +153,34 @@ class Trainer(object):
                 self.optimizer_Adam.step()
                 train_loss += loss.item()
                 total_loss += mean_loss
-            self.lr_scheduler.step()
+                # log.info("Case index", case_index, "mean_loss", mean_loss.item())
+            if self.lr_scheduler and epoch >= 1000:
+                self.lr_scheduler.step()
+            current_lr = self.optimizer_Adam.get_lr()
             train_loss = train_loss / self.train_samples
             total_loss = total_loss.item() / self.train_samples
+            if isinstance(self.problem, Stokes):
+                self.net_pde.no_grad = paddle.no_grad
+                val_mse, val_mse_bc = self.args.tester.calculate(self.net_pde)
+                self.net_pde.no_grad = empty_context_manager
+            else:
+                with paddle.no_grad():
+                    val_mse, val_mse_bc = self.args.tester.calculate(self.net_pde)
+
             t2 = time.time()
-            infos = (f'Epoch: {epoch:5d}/{self.epochs_Adam:5d} ' +
-                f'time: {t2 - tt:.2f} ' +
-                f'lr: {self.lr_scheduler.get_lr():.2e} ' +
-                f'loss: {train_loss:.5f}  ' + f'total loss: {total_loss:.5f}  ')
-            print(infos)
-            output_file.write(
-                f"epoch:{epoch:5d}, time: {t2 - tt:.2f}, loss: {float(train_loss):.3f}, total loss: {float(total_loss):.3f}"
-            )
+            log.info(
+                f'Epoch: {epoch}/{self.epochs_Adam} ,'
+                f'time: {t2 - tt:.2f} ,'
+                f'lr: {current_lr:.2e} ,'
+                f'train_mse: {train_loss:.5f}  ' + f'train_mse_bc: {total_loss:.5f} ,'
+                f'val_mse: {val_mse:.5f}  ' + f'val_mse_bc: {val_mse_bc:.5f}'
+                )
+
             tt = time.time()
             if (epoch + 1) % 5 == 0:
-                is_best = train_loss < best_loss
-                if is_best:
-                    best_loss = train_loss
+                if train_loss < best_train_loss:
+                    best_train_loss = train_loss
                     for i in range(self.args.shape[0]):
                         for j in range(self.args.shape[1]):
-                            checkpoint_path = os.path.join('checkpoints', f'{self.pde_case}_net_pde.G[{i}][{j}].pdparams')
+                            checkpoint_path = os.path.join(self.args.output_dir, f'G{j}_epoch_{epoch}.pdparams')
                             checkpoint = paddle.save(self.net_pde.G[i][j].state_dict(), path=checkpoint_path)
-            if train_loss < self.tol:
-                print(f'train_loss after Adam is {train_loss:.4e} ')
-                is_best = train_loss < best_loss
-                for i in range(self.args.shape[0]):
-                    for j in range(self.args.shape[1]):
-                        checkpoint_path = os.path.join('checkpoints', f'{self.pde_case}_net_pde.G[{i}][{j}].pdparams')
-                        checkpoint = paddle.save(self.net_pde.G[i][j].state_dict(), path=checkpoint_path)
-                break
-        output_file.close()

@@ -1,18 +1,26 @@
+import os
 import sys
-sys.path.append("../external-libraries")
+import hydra
 import paddle
 from problem import Poisson
 from options import Options
 from trainer import Trainer
+from Inference import Tester
 
 
-if __name__ == '__main__':
+@hydra.main(version_base=None, config_path="./configs", config_name="poisson.yaml")
+def main(cfg):
     args = Options().parse()
+    input_dir = cfg.input_dir
     args.pde_case = 'Poisson'
-    args.mesh_path = '../mesh/poisson/heat_sink_v2_domain.mphtxt'
-    args.boundary_mesh_path = ('../mesh/poisson/heat_sink_v2_boundary.mphtxt')
-    args.problem = Poisson('../data/poisson/case1/train_data')
-
+    args.mesh_path = input_dir + '/mesh/poisson/heat_sink_v2_domain.mphtxt'
+    args.boundary_mesh_path = input_dir + '/mesh/poisson/heat_sink_v2_boundary.mphtxt'
+    args.problem = Poisson(
+        input_dir + '/data/poisson/case1/train_data',
+        'chip')
+    args.val_problem = Poisson(
+        input_dir + '/data/poisson/case1/test_data',
+        'chip')
     args.resume = False
     args.save_vtk = False
     
@@ -27,9 +35,14 @@ if __name__ == '__main__':
     args.train_samples = 80
     args.test_samples = 5
     args.lr = 1e-3
-
+    args.lr_scheduler = "StepDecay"
+    args.output_dir = cfg.output_dir
+    os.makedirs(args.output_dir, exist_ok=True)
     paddle.seed(seed=args.seed)
-
+    tester = Tester(args)
+    args.tester = tester
     trainer = Trainer(args)
     trainer.train()
 
+if __name__ == '__main__':
+    main()

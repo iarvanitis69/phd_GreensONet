@@ -1,0 +1,18 @@
+hydra:
+  run:
+    dir: output/${model_name}/${dataset_name}/${mode}/${now:%Y-%m-%d-%H-%M-%S}
+  job:
+    name: ${mode}
+    chdir: false
+  sweep:
+    dir: ${hydra.run.dir}
+    subdir: ./
+
+model_name: GreensONet
+dataset_name: Diffusion_Plate
+
+mode: "train"
+checkpoint: ""
+seed: 0
+input_dir: "../GON_jcp"
+output_dir: ${hydra:run.dir}

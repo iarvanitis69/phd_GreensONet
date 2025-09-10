@@ -35,7 +35,6 @@ class VTK_Dataset(Dataset):
         if train_samples is not None:
             self.case_index_list.sort()
             self.case_index_list = self.case_index_list[:train_samples]
-        print("Test/Train *.vtu file index = ", sorted(self.case_index_list))
         self.mesh = mesh
         self.z_blocks = self.mesh.z_blocks
         self.x_in_wts = paddle.to_tensor(self.mesh.X_interior['wts'], dtype='float32')
@@ -98,7 +97,7 @@ class VTK_Dataset(Dataset):
 class Tester():
     def __init__(self, args):
         self.args = args
-        self.problem = args.problem
+        self.val_problem = args.val_problem
         self.mesh = Mesh(
             args.mesh_path, 
             args.boundary_mesh_path, 
@@ -108,39 +107,57 @@ class Tester():
             ngs_interior=self.args.ngs_interior
         )
         self.loss_function = paddle.nn.MSELoss()
-        self.net_pde = Net_Integral(args.layers, args.shape, self.args.ngs_boundary, self.args.ngs_interior, args.problem, eval_mode=True)
+        self.net_pde = Net_Integral(args.layers, args.shape, self.args.ngs_boundary, self.args.ngs_interior, args.val_problem, eval_mode=True)
         # load the pre-trained model from checkpoint
-        for i in range(args.shape[0]):
-            for j in range(args.shape[1]):
-                print("\nLoading the pre-trained model from : ", self.args.checkpoint_path[j])
-                checkpoint = paddle.load(path=str(self.args.checkpoint_path[j]))
-                self.net_pde.G[i][j].set_state_dict(checkpoint)
-                self.net_pde.G[i][j].eval()
-
-    def calculate(self):
         print("Mesh blocks number :", len(self.mesh.blocks))
+        if hasattr(self.args, "checkpoint_path"):
+            for i in range(args.shape[0]):
+                for j in range(args.shape[1]):
+                    print("\nLoading the pre-trained model from : ", self.args.checkpoint_path[j])
+                    if self.args.checkpoint_path[j].endswith("pdparams"):
+                        state_dict = paddle.load(path=str(self.args.checkpoint_path[j]))
+                    elif self.args.checkpoint_path[j].endswith("npy"):
+                        checkpoint = np.load(str(self.args.checkpoint_path[j]), allow_pickle=True).item()
+                        # self.net_pde.G[i][j]
+                        state_dict = {}
+                        state_dict['layers_list.0.weight'] = checkpoint['0']
+                        state_dict['layers_list.0.bias'] = checkpoint['1'].reshape(-1)
+                        state_dict['layers_list.1.weight'] = checkpoint['2']
+                        state_dict['layers_list.1.bias'] = checkpoint['3'].reshape(-1)
+                        state_dict['layers_list.2.weight'] = checkpoint['4']
+                        state_dict['layers_list.2.bias'] = checkpoint['5'].reshape(-1)
+                        state_dict['layers_list.3.weight'] = checkpoint['6']
+                        state_dict['layers_list.3.bias'] = checkpoint['7'].reshape(-1)
+                        state_dict = {k:paddle.to_tensor(v, dtype="float32") for k, v in state_dict.items()}
+                    self.net_pde.G[i][j].set_state_dict(state_dict)
+                    self.net_pde.G[i][j].eval()
+        else:
+            print("Initialize Evaluator")
+
+    def calculate(self, model_val=None):
         for K in range(len(self.mesh.blocks)):
             if self.mesh.z_blocks[K] is not None and len(self.mesh.z_blocks[K]) > 0:
                 self.mesh.z_blocks[K]['coord'] = paddle.to_tensor(self.mesh.z_blocks[K]['coord'], dtype='float32')
-                self.calculate_block(K)
+                mse, mse_bc = self.calculate_block(K, model_val)
             else:
                 raise ValueError(f'Block #{K} is empty!!!')
+        return np.mean(mse), np.mean(mse_bc)
 
-    def calculate_block(self, k):
+    def calculate_block(self, k, model_val=None):
         loss = 0
         loss_list = []
-        l2_rel_error_list = []
-        test_dataset = VTK_Dataset(self.args, self.mesh, self.problem)
-        
+        mse_bc_list = []
+        if not model_val:
+            model = self.net_pde
+        else:
+            model = model_val
+        test_dataset = VTK_Dataset(self.args, self.mesh, self.val_problem)
         # for case_index in case_index_list:
         for data in test_dataset:
             x_in_coord_list, x_in_wts_list, x_bc_coord_list, x_bc_wts_list, f_interior_list, g_boundary_list, a_boundary_list, z_blocks, case_index, x_bc_normal = data 
             coord = z_blocks[k]['coord']
-            
-            print("\nInfer the test cases ID: ", case_index)
             tt = time.time()
-
-            u_pred = self.net_pde(
+            u_pred = model(
                 x_in_coord_list, 
                 x_in_wts_list, 
                 x_bc_wts_list,
@@ -152,23 +169,24 @@ class Tester():
                 x_bc_normal,
             )
             
-            u_exac = self.problem.u_exact(coord.numpy(), case_index)
+            u_exac = self.val_problem.u_exact(coord.numpy(), case_index)
             u_exac = paddle.to_tensor(u_exac, dtype='float32')
             loss = self.loss_function(u_pred, u_exac)
             
-            l2_rel_error = paddle.sum((u_pred - u_exac)**2) / len(self.mesh.vertices)
-
-            print(f'Finish block {k}, spent time: {(time.time() - tt):.2f} s, mse loss: {loss.item():.4f}, l2 loss: {l2_rel_error.item():.6f}')
+            mse_bc = paddle.sum((u_pred - u_exac)**2) / len(self.mesh.vertices)
+            # if not model_val:
+                # print(f'Case {case_index}, t = {(time.time() - tt):.2f} s, mse loss: {loss.item():.4f}, mse_bc loss: {mse_bc.item():.6f}')
             
             if self.args.save_vtk is True:
                 self.save_to_vtk(case_index, coord.numpy(), u_pred.numpy(), u_exac.numpy())
                 
             loss_list.append(loss.item())
-            l2_rel_error_list.append(l2_rel_error.item())
+            mse_bc_list.append(mse_bc.item())
 
-        print(f'\nMSE loss over [{len(test_dataset)}] test cases {(sum(loss_list) / len(loss_list)):.3f}')
-        print(f'L2 loss over [{len(test_dataset)}] test cases {(sum(l2_rel_error_list) / len(l2_rel_error_list)):.6f}')
-        return loss_list, l2_rel_error_list
+        if not model_val:
+            print(f'\nMSE loss over [{len(test_dataset)}] test cases {(sum(loss_list) / len(loss_list)):.2e}')
+            print(f'MSE with BC loss over [{len(test_dataset)}] test cases {(sum(mse_bc_list) / len(mse_bc_list)):.2e}')
+        return loss_list, mse_bc_list
 
     def save_to_vtk(self, case_index, coords, u_pred, u_exac):
         error = np.abs(u_pred.numpy()-u_exac.numpy())
@@ -178,7 +196,7 @@ class Tester():
                 index = np.where(np.all(np.isclose(coords,node), axis=1))[0][0]
                 sorted_data.append([node[0], node[1], node[2], u_pred[index][0], u_exac[index][0], error[index][0]])
             else:
-                res = self.problem.u_exact(node[np.newaxis, ...], case_index)
+                res = self.val_problem.u_exact(node[np.newaxis, ...], case_index)
                 boundary_point_value = res
                 sorted_data.append([node[0], node[1], node[2],
                     boundary_point_value[0][0], boundary_point_value[0][0], 0])
@@ -191,42 +209,51 @@ class Tester():
 
 if __name__ == '__main__':
     args = Options().parse()
+    WORK_DIR = "../GON_jcp"
 
-    # Case: Heterogeneous reaction-diffusion equations
-    # Flat Plate
-    print("/----------------------- [Case 2: Heterogeneous reaction-diffusion equations] [name:Flat Plate] -----------------------/")
+    print("\n[Case 1: Heterogeneous reaction-diffusion equations] [name:Flat Plate]")
     args.pde_case = 'Diffusion'
-    args.mesh_path = '../mesh/diffusion/regular_domain.mphtxt'
-    args.problem = DiffusionReaction('../data/diffusion/case1/test_data')
-    args.boundary_mesh_path = ('../mesh/diffusion/regular_boundary.mphtxt')
-    args.checkpoint_path = ['./checkpoints/Diffusion_net_pde.G[0][0].pdparams', './checkpoints/Diffusion_net_pde.G[0][1].pdparams']
-    
+    args.mesh_path = WORK_DIR + '/mesh/diffusion/regular_domain.mphtxt'
+    args.boundary_mesh_path = WORK_DIR + '/mesh/diffusion/regular_boundary.mphtxt'
+    args.checkpoint_path = [
+        # './checkpoints/Diffusion_G0.pdparams',
+        # './checkpoints/Diffusion_G1.pdparams']
+    # args.checkpoint_path = [
+        # './checkpoints/G0.npy',
+        # './checkpoints/G1.npy']
+        # './Diffusion_plate/2025-09-04_13-14/G0_epoch_4889.pdparams',
+        # './Diffusion_plate/2025-09-04_13-14/G1_epoch_4889.pdparams']
+        '/work/GreensONet/GreensONet/Diffusion_plate/2025-09-04_13-14/G1_epoch_4889.pdparams',
+        './output/GreensONet/Diffusion_Plate/train/2025-09-08-06-46-58/G1_epoch_2359.pdparams']
+        # './checkpoints_constlr/Diffusion_G0.pdparams',
+        # './checkpoints_constlr/Diffusion_G1.pdparams']
+    args.val_problem = DiffusionReaction(
+        WORK_DIR + '/data/diffusion/case1/test_data',
+        geometry="plate")
+
     args.save_vtk = False
-    
     args.ngs_boundary = 3
     args.ngs_interior = 4
     args.shape = [1, 2]
     args.blocks_num = [1, 1, 1]
-    args.domain = [0, 1, 0, 1, 0, 1]
+    args.domain = [-1, 1, -1, 1, -1, 1]
     args.layers = [[[6, 12, 12, 12, 1], [6, 12, 12, 12, 1]]]
-    
     tester = Tester(args)
-    tester.calculate()
+    with paddle.no_grad():
+        tester.calculate()
 
-    
-    
-    # Case Poisson Equation
-    print("/----------------------- [Case 1: Steady heat conduction equations] [name : Poisson Equation] -----------------------/")
+    print("\n[Case 2: Steady heat conduction equations] [name : Poisson Equation]")
     args = Options().parse()
     args.pde_case = 'Poisson'
-    args.problem = Poisson('../data/poisson/case1/test_data')
-    args.mesh_path = '../mesh/poisson/heat_sink_v2_domain.mphtxt'
-    args.boundary_mesh_path = ('../mesh/poisson/heat_sink_v2_boundary.mphtxt')
-    # args.checkpoint_path =['../output/checpoint_poisson_case_1/block0_0.pdparams', '../output/checpoint_poisson_case_1/block0_1.pdparams']
-    args.checkpoint_path =['./checkpoints/Poisson_net_pde.G[0][0].pdparams', './checkpoints/Poisson_net_pde.G[0][1].pdparams']
-    
+    args.val_problem = Poisson(
+        WORK_DIR + '/data/poisson/case1/test_data',
+        geometry="chips")
+    args.mesh_path = WORK_DIR + '/mesh/poisson/heat_sink_v2_domain.mphtxt'
+    args.boundary_mesh_path = WORK_DIR + '/mesh/poisson/heat_sink_v2_boundary.mphtxt'
+    args.checkpoint_path =[
+        './output/GreensONet/Poisson/train/2025-09-08-07-04-17/G0_epoch_1584.pdparams',
+        './output/GreensONet/Poisson/train/2025-09-08-07-04-17/G1_epoch_1584.pdparams']
     args.save_vtk = False
-
     args.domain = [0, 1, 0, 1, 0, 1]
     args.blocks_num = [1, 1, 1]
     args.shape = [1, 2]
@@ -236,16 +263,19 @@ if __name__ == '__main__':
     paddle.seed(seed=args.seed)
     args.layers = [[[6, 12, 12, 12, 1], [6, 12, 12, 12, 1]]]
     tester = Tester(args)
-    tester.calculate()
-
+    with paddle.no_grad():
+        tester.calculate()
 
     # Stokes
-    print("/----------------------- [Case 3: Stokes equations] [name : 3D lid-driven cavity] -----------------------/")
-    args.mesh_path = '../mesh/stokes/domain.mphtxt'
-    args.boundary_mesh_path = '../mesh/stokes/boundary.mphtxt'
-    args.checkpoint_path =['../output/checkpoint_stokes/x_block0_0.pdparams', '../output/checkpoint_stokes/x_block0_1.pdparams', '../output/checkpoint_stokes/x_block0_2.pdparams']
+    print("\n[Case 3: Stokes equations] [name : 3D lid-driven cavity]")
+    args.mesh_path = WORK_DIR + '/mesh/stokes/domain.mphtxt'
+    args.boundary_mesh_path = WORK_DIR + '/mesh/stokes/boundary.mphtxt'
+    args.checkpoint_path =[
+        './output/GreensONet/Stokes/train/2025-09-09-06-46-06/G0_epoch_1979.pdparams',
+        './output/GreensONet/Stokes/train/2025-09-09-06-46-06/G1_epoch_1979.pdparams',
+        './output/GreensONet/Stokes/train/2025-09-09-06-46-06/G2_epoch_1979.pdparams']
     args.velocity_component_name = "x"
-    args.problem = Stokes('../data/stokes/test_data', args.velocity_component_name)
+    args.val_problem = Stokes(WORK_DIR + '/data/stokes/test_data', args.velocity_component_name)
 
     args.save_vtk = False
     args.domain = [0, 1, 0, 1, 0, 1]

@@ -56,9 +56,8 @@ class DiffusionReaction(object):
     
 
 class Poisson(DiffusionReaction):
-
-    def __init__(self, data_folder):
-        super().__init__(data_folder)
+    def __init__(self, data_folder, geometry):
+        super().__init__(data_folder, geometry)
     
     def a(self, x):
         res = paddle.ones_like(x=x[:, 0])
@@ -66,7 +65,6 @@ class Poisson(DiffusionReaction):
 
 
 class Stokes(object):
-
     def __init__(self, data_folder, velocity_component_name):
         self.data_folder = data_folder
         self.velocity_component_name = velocity_component_name
