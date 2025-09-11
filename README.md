@@ -4,7 +4,7 @@ Jianghang Gu, Ling Wen, Yuntian Chen, and Shiyi Chen, An explainable operator ap
 
 
 # Framework
-The framework of GreensONet:
+The framework of GON:
 
 (a) Import user-defined free tetrahedral mesh and user-defined physical conditions;
 
