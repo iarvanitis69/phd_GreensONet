@@ -1,4 +1,4 @@
-paddle
+paddle==3.0.0
 matplotlib
 meshio
 hydra-core
