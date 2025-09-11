@@ -6,6 +6,7 @@ from problem import Poisson
 from options import Options
 from trainer import Trainer
 from Inference import Tester
+sys.path.append("../external-libraries")
 
 
 @hydra.main(version_base=None, config_path="./configs", config_name="poisson.yaml")
@@ -35,7 +36,10 @@ def main(cfg):
     args.train_samples = 80
     args.test_samples = 5
     args.lr = 1e-3
+    args.act = "sin"
     args.lr_scheduler = "StepDecay"
+    args.lr_scheduler_step_size = 100
+    args.weight_decay = 0.
     args.output_dir = cfg.output_dir
     os.makedirs(args.output_dir, exist_ok=True)
     paddle.seed(seed=args.seed)

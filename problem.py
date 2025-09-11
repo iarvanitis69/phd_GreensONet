@@ -6,7 +6,6 @@ import meshio
 
 
 class DiffusionReaction(object):
-
     def __init__(self, data_folder, geometry):
         self.data_folder = data_folder
         self.geometry = geometry
@@ -35,7 +34,10 @@ class DiffusionReaction(object):
         return res
 
     def a(self, x):
-        res = (x[:, 0] - 0.5) ** 2 + (x[:, 1] - 0.5) ** 2 + (x[:, 2] - 0.1) ** 2
+        if self.geometry == "plate":
+            res = (x[:, 0] - 0.5) ** 2 + (x[:, 1] - 0.5) ** 2 + (x[:, 2] - 0.1) ** 2
+        elif self.geometry == "pipe":
+            res = 2e-2 * (x[:,0] > 0.08) + 1e-2 * (x[:,0] <= 0.08)
         return res
 
     def g(self, x, case_index):

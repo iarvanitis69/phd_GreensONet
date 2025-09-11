@@ -7,8 +7,8 @@ import sys
 import os
 import hydra
 import paddle
-
 sys.path.append("../external-libraries")
+
 
 @hydra.main(version_base=None, config_path="./configs", config_name="diffusion_plate.yaml")
 def main(cfg):
@@ -28,16 +28,19 @@ def main(cfg):
     args.save_vtk = False
     args.ngs_boundary = 3
     args.ngs_interior = 4
-    args.seed = 3407
+    args.seed = 42
     args.shape = [1, 2]
     args.blocks_num = [1, 1, 1]
     args.domain = [-1, 1, -1, 1, -1, 1]
     args.layers = [[[6, 12, 12, 12, 1], [6, 12, 12, 12, 1]]]
-    args.epochs_Adam = 5000
-    args.train_samples = 15
-    args.test_samples = 5
+    args.epochs_Adam = 2000
+    args.train_samples = 70
+    args.test_samples = 30
     args.lr = 1e-3
-    args.lr_scheduler = "const"
+    args.act = "sin"
+    args.lr_scheduler = "StepDecay"
+    args.lr_scheduler_step_size = 100
+    args.weight_decay = 0.
     args.output_dir = cfg.output_dir
     os.makedirs(args.output_dir, exist_ok=True)
     paddle.seed(seed=args.seed)

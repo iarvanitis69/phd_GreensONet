@@ -32,20 +32,20 @@ class VTK_Dataset(Dataset):
         self.problem = problem
         self.file_list = os.listdir(problem.data_folder)
         self.case_index_list = extract_integers_from_string(self.file_list)
-        if train_samples is not None:
-            self.case_index_list.sort()
-            self.case_index_list = self.case_index_list[:train_samples]
+        self.case_index_list.sort()
+        self.case_index_list = self.case_index_list[:train_samples]
         self.mesh = mesh
         self.z_blocks = self.mesh.z_blocks
         self.x_in_wts = paddle.to_tensor(self.mesh.X_interior['wts'], dtype='float32')
         self.x_in_coord = paddle.to_tensor(self.mesh.X_interior['coord'], dtype='float32')
         self.x_bc_wts = paddle.to_tensor(self.mesh.X_boundary['wts'], dtype='float32')
         self.x_bc_coord = paddle.to_tensor(self.mesh.X_boundary['coord'], dtype='float32')
-        self.x_bc_normal = self.mesh.X_boundary['normal']
-        self.z_blocks_coord = self.mesh.z_blocks[0]['coord']
+        self.x_bc_normal = self.mesh.X_boundary['normal'].astype("float32")
+        self.z_blocks_coord = self.mesh.z_blocks[0]['coord'].astype("float32")
         if "boundary_type" in self.mesh.X_boundary.keys():
             self.input_boundary_type = self.mesh.X_boundary['boundary_type']
-            self.input_boundary_type = paddle.to_tensor(self.input_boundary_type).astype('float32')
+            if not isinstance(self.input_boundary_type, paddle.Tensor):
+                self.input_boundary_type = paddle.to_tensor(self.input_boundary_type).astype('float32')
 
     def __getitem__(self, k):
         x_in_coord_list = []
@@ -68,7 +68,6 @@ class VTK_Dataset(Dataset):
             input_boundary_type = case_index
             input_boundary_list = self.x_bc_coord
 
-
         for i in range(self.args.ngs_interior):
             x_in_coord_list.append(self.x_in_coord[i])
             x_in_wts_list.append(self.x_in_wts[i])
@@ -76,7 +75,6 @@ class VTK_Dataset(Dataset):
             if isinstance(self.problem, Stokes):
                 f_interior = f_interior.reshape([N_interior, -1])
             f_interior_list.append(f_interior)
-
 
         for i in range(self.args.ngs_boundary):
             x_bc_wts_list.append(self.x_bc_wts[i])
@@ -107,13 +105,13 @@ class Tester():
             ngs_interior=self.args.ngs_interior
         )
         self.loss_function = paddle.nn.MSELoss()
-        self.net_pde = Net_Integral(args.layers, args.shape, self.args.ngs_boundary, self.args.ngs_interior, args.val_problem, eval_mode=True)
+        self.net_pde = Net_Integral(
+            args.layers, args.shape, args.ngs_boundary, args.ngs_interior, args.val_problem, args.act, eval_mode=True)
         # load the pre-trained model from checkpoint
-        print("Mesh blocks number :", len(self.mesh.blocks))
         if hasattr(self.args, "checkpoint_path"):
             for i in range(args.shape[0]):
                 for j in range(args.shape[1]):
-                    print("\nLoading the pre-trained model from : ", self.args.checkpoint_path[j])
+                    print("Loading the pre-trained model from : ", self.args.checkpoint_path[j])
                     if self.args.checkpoint_path[j].endswith("pdparams"):
                         state_dict = paddle.load(path=str(self.args.checkpoint_path[j]))
                     elif self.args.checkpoint_path[j].endswith("npy"):
@@ -147,12 +145,13 @@ class Tester():
         loss = 0
         loss_list = []
         mse_bc_list = []
+
         if not model_val:
             model = self.net_pde
         else:
             model = model_val
         test_dataset = VTK_Dataset(self.args, self.mesh, self.val_problem)
-        # for case_index in case_index_list:
+
         for data in test_dataset:
             x_in_coord_list, x_in_wts_list, x_bc_coord_list, x_bc_wts_list, f_interior_list, g_boundary_list, a_boundary_list, z_blocks, case_index, x_bc_normal = data 
             coord = z_blocks[k]['coord']
@@ -184,7 +183,7 @@ class Tester():
             mse_bc_list.append(mse_bc.item())
 
         if not model_val:
-            print(f'\nMSE loss over [{len(test_dataset)}] test cases {(sum(loss_list) / len(loss_list)):.2e}')
+            print(f'MSE loss over [{len(test_dataset)}] test cases {(sum(loss_list) / len(loss_list)):.2e}')
             print(f'MSE with BC loss over [{len(test_dataset)}] test cases {(sum(mse_bc_list) / len(mse_bc_list)):.2e}')
         return loss_list, mse_bc_list
 
@@ -216,17 +215,8 @@ if __name__ == '__main__':
     args.mesh_path = WORK_DIR + '/mesh/diffusion/regular_domain.mphtxt'
     args.boundary_mesh_path = WORK_DIR + '/mesh/diffusion/regular_boundary.mphtxt'
     args.checkpoint_path = [
-        # './checkpoints/Diffusion_G0.pdparams',
-        # './checkpoints/Diffusion_G1.pdparams']
-    # args.checkpoint_path = [
-        # './checkpoints/G0.npy',
-        # './checkpoints/G1.npy']
-        # './Diffusion_plate/2025-09-04_13-14/G0_epoch_4889.pdparams',
-        # './Diffusion_plate/2025-09-04_13-14/G1_epoch_4889.pdparams']
-        '/work/GreensONet/GreensONet/Diffusion_plate/2025-09-04_13-14/G1_epoch_4889.pdparams',
-        './output/GreensONet/Diffusion_Plate/train/2025-09-08-06-46-58/G1_epoch_2359.pdparams']
-        # './checkpoints_constlr/Diffusion_G0.pdparams',
-        # './checkpoints_constlr/Diffusion_G1.pdparams']
+        './output/GreensONet/Diffusion_Plate/train/2025-09-10-03-44-36/G0_epoch_1999.pdparams',
+        './output/GreensONet/Diffusion_Plate/train/2025-09-10-03-44-36/G1_epoch_1999.pdparams']
     args.val_problem = DiffusionReaction(
         WORK_DIR + '/data/diffusion/case1/test_data',
         geometry="plate")
@@ -238,6 +228,7 @@ if __name__ == '__main__':
     args.blocks_num = [1, 1, 1]
     args.domain = [-1, 1, -1, 1, -1, 1]
     args.layers = [[[6, 12, 12, 12, 1], [6, 12, 12, 12, 1]]]
+    args.act = "sin"
     tester = Tester(args)
     with paddle.no_grad():
         tester.calculate()
@@ -259,14 +250,14 @@ if __name__ == '__main__':
     args.shape = [1, 2]
     args.ngs_boundary = 1
     args.ngs_interior = 1
-    args.test_samples = 1
+    args.test_samples = 21
+    args.act = "sin"
     paddle.seed(seed=args.seed)
     args.layers = [[[6, 12, 12, 12, 1], [6, 12, 12, 12, 1]]]
     tester = Tester(args)
     with paddle.no_grad():
         tester.calculate()
 
-    # Stokes
     print("\n[Case 3: Stokes equations] [name : 3D lid-driven cavity]")
     args.mesh_path = WORK_DIR + '/mesh/stokes/domain.mphtxt'
     args.boundary_mesh_path = WORK_DIR + '/mesh/stokes/boundary.mphtxt'
@@ -276,15 +267,38 @@ if __name__ == '__main__':
         './output/GreensONet/Stokes/train/2025-09-09-06-46-06/G2_epoch_1979.pdparams']
     args.velocity_component_name = "x"
     args.val_problem = Stokes(WORK_DIR + '/data/stokes/test_data', args.velocity_component_name)
-
     args.save_vtk = False
     args.domain = [0, 1, 0, 1, 0, 1]
     args.blocks_num = [1, 1, 1]
     args.shape = [1, 3]
     args.ngs_boundary = 3
     args.ngs_interior = 4
-    args.test_samples = 1
+    args.test_samples = 5
+    args.act = "sin"
     args.layers = [[[6, 12, 24, 12, 1], [6, 12, 24, 12, 1], [6, 12, 24, 12, 1]]]
     tester = Tester(args)
     tester.calculate()
-    
+
+    print("\n[Case 4: Diffusion equations] [name : pipe]")
+    args.geometry = 'pipe'
+    args.mesh_path = WORK_DIR + '/mesh/diffusion/pipe_v2_domain.mphtxt'
+    args.boundary_mesh_path = WORK_DIR + '/mesh/diffusion/pipe_v2_boundary.mphtxt'
+    args.checkpoint_path =[
+        './output/GreensONet/Diffusion_Pipe/train/2025-09-10-08-13-36/G0_epoch_9999.pdparams',
+        './output/GreensONet/Diffusion_Pipe/train/2025-09-10-08-13-36/G1_epoch_9999.pdparams']
+    args.val_problem = DiffusionReaction(
+        WORK_DIR + '/data/diffusion/case2/test_data',
+        geometry=args.geometry
+        )
+    args.save_vtk = False
+    args.domain = [-5, 5, -5, 5, -5, 5]
+    args.blocks_num = [1, 1, 1]
+    args.shape = [1, 2]
+    args.ngs_boundary = 3
+    args.ngs_interior = 4
+    args.test_samples = 5
+    args.act = "relu"
+    args.layers = [[[6, 14, 24, 24, 1], [6, 24, 24, 24, 1]]]
+    tester = Tester(args)
+    tester.calculate()
+ 

@@ -38,7 +38,7 @@ class Trainer(object):
         self.epochs_Adam = self.args.epochs_Adam
         self.lam = self.args.lam
         self.lr = self.args.lr
-        self.net_pde = Net_Integral(self.args.layers, args.shape, self.ngs_boundary, self.ngs_interior, self.problem)
+        self.net_pde = Net_Integral(self.args.layers, args.shape, self.ngs_boundary, self.ngs_interior, self.problem, args.act)
         if self.args.resume:
             log.info(f'Resuming training, loading {args.resume} ...')
             for i in range(self.args.shape[0]):
@@ -91,7 +91,6 @@ class Trainer(object):
                 out_35.stop_gradient = not True
                 self.mesh.X_boundary['wts'][k] = out_35
         for K in range(len(self.mesh.blocks)):
-            print("\nblock", K)
             if self.mesh.z_blocks[K] is not None and len(self.mesh.z_blocks[K]) > 0:
                 if not isinstance(self.mesh.z_blocks[K]['coord'], paddle.Tensor):
                     self.mesh.z_blocks[K]['coord'] = paddle.to_tensor(data=
@@ -110,7 +109,7 @@ class Trainer(object):
             shape[1]) for param in self.net_pde.G[i][j].parameters() if (not
             param.stop_gradient) == True]
         self.optimizer_Adam = paddle.optimizer.Adam(parameters=params,
-            learning_rate=self.lr, weight_decay=0.0)
+            learning_rate=self.lr, weight_decay=self.args.weight_decay)
         if self.args.lr_scheduler == "StepDecay":
             self.lr_scheduler = paddle.optimizer.lr.StepDecay(
                 step_size=self.args.lr_scheduler_step_size,

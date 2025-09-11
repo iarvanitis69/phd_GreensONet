@@ -27,12 +27,17 @@ def tile(x, y):
 
 
 class BSNN(nn.Layer):
-    def __init__(self, layers):
+    def __init__(self, layers, act="sin"):
         
         super(BSNN, self).__init__()
         self.layers = layers
         self.num_layers = len(layers)
-        self.act = paddle.sin
+        if act == "sin":
+            self.act = paddle.sin
+        elif act == "relu":
+            self.act = paddle.paddle.nn.functional.relu
+        else:
+            raise NotImplementedError
         self.width = [layers[0]] + [int(pow(2, i - 1) * layers[i]) for i in range(1, len(layers) - 1)] + [layers[-1]]
         self.masks = self.construct_mask()
         
@@ -69,14 +74,14 @@ class BSNN(nn.Layer):
 
 
 class Net_Integral(nn.Layer):
-    def __init__(self, layers, shape, ngs_boundary, ngs_interior, problem, eval_mode=False):
+    def __init__(self, layers, shape, ngs_boundary, ngs_interior, problem, act="sin", eval_mode=False):
         super().__init__()
         self.G = []
         if len(shape) > 1:
             for i in range(shape[0]):
                 Row = []
                 for j in range(shape[1]):
-                    Row.append(BSNN(layers[i][j]))
+                    Row.append(BSNN(layers[i][j], act))
                 self.G.append(Row)
         else:
             raise NotImplementedError
@@ -105,34 +110,33 @@ class Net_Integral(nn.Layer):
                     f_interior = f_interior.reshape([-1, N_interior]).transpose([1, 0])
                     fG_interior = f_interior * G_interior
                     fG_quad += fG_interior.transpose([1, 0]) @ x_in_wts_list[k]
-            # print_max_memo()
             for k in range(self.ngs_boundary):
                 INPUT_boundary = tile(x_bc_coord_list[k], z)
                 INPUT_boundary.stop_gradient = False
                 G_boundary = BSNN_boundary(INPUT_boundary).reshape([-1, N_boundary]).transpose([1, 0])
                 g_boundary = g_boundary_list[k]
                 a_boundary = a_boundary_list[k]
-                if not isinstance(self.problem, Stokes):
-                    g_boundary = g_boundary.tile(repeat_times=[z.shape[0], 1])
-                    g_boundary = g_boundary.reshape([-1, N_boundary]).transpose([1, 0])
-                    a_boundary = a_boundary.tile(repeat_times=[z.shape[0], 1])
-                    a_boundary = a_boundary.reshape([-1, N_boundary]).transpose([1, 0])
-                else:
+                if isinstance(self.problem, Stokes):
                     gradients = paddle.grad(outputs=G_boundary, inputs=INPUT_boundary, allow_unused=True)
                     Ggrad_boundary = paddle.grad(G_boundary, INPUT_boundary, paddle.ones_like(G_boundary), allow_unused=True)[0][:, :3]
                     Gx_boundary = Ggrad_boundary[:, [0]].reshape([N_boundary, -1])
                     Gy_boundary = Ggrad_boundary[:, [1]].reshape([N_boundary, -1])
                     Gz_boundary = Ggrad_boundary[:, [2]].reshape([N_boundary, -1])
                     G_boundary = Gx_boundary * x_bc_normal[:, [0]] + Gy_boundary * x_bc_normal[:, [1]] + Gz_boundary * x_bc_normal[:, [2]]
-                # print(a_boundary.shape, g_boundary.shape, Gn_boundary.shape)
-                # exit()
+                else:
+                    g_boundary = g_boundary.tile(repeat_times=[z.shape[0], 1])
+                    g_boundary = g_boundary.reshape([-1, N_boundary]).transpose([1, 0])
+                    if isinstance(self.problem, DiffusionReaction) and self.problem.geometry == "pipe":
+                        a_boundary = 1.
+                    else:
+                        a_boundary = a_boundary.tile(repeat_times=[z.shape[0], 1])
+                        a_boundary = a_boundary.reshape([-1, N_boundary]).transpose([1, 0])
                 gGn_boundary = a_boundary * g_boundary * G_boundary
                 gGn_quad += gGn_boundary.transpose([1, 0]) @ x_bc_wts_list[k]
-            # print_max_memo()
             return fG_quad, gGn_quad
+
         if isinstance(self.problem, Stokes):
             for j in range(len(self.G[0])):
-                # print("j=", j)
                 fG_quad, gGn_quad = forward_layer(self.G[0][j], self.G[0][j], fG_quad, gGn_quad)
         else:
             fG_quad, gGn_quad = forward_layer(self.G[0][0], self.G[0][1], fG_quad, gGn_quad)
