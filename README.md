@@ -29,17 +29,35 @@ pip install -r requirements.txt
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+# Download Data and Pretrained Checkpoints
+
+PaddleScience (Recommend)
+```
+mkdir data
+cd data
+wget https://dataset.bj.bcebos.com/PaddleScience/PaddleCFD/GON_dataset.tar
+tar -xvf GON_dataset.tar
+cd ..
+wget https://dataset.bj.bcebos.com/PaddleScience/PaddleCFD/ckpt.tar
+tar -xvf ckpt.tar
+```
+
+Google Drive:
+
+[data](https://drive.google.com/file/d/1lv0WuWCrZsB2MZcaMDFRn06HsxGLgNaq/view?usp=sharing)
+
+[pretrain checkpoint](https://drive.google.com/file/d/122U51gwpriZyQKg6WPCaSXCYX8DzOAIV/view?usp=sharing)
+
+# Test
+```
+python Inference.py
+```
 
 # Train
 ```
 cd GreenONet
 chmod 777 -R run.sh
 ./run.sh
-```
-
-# Test
-```
-python Inference.py
 ```
 
 

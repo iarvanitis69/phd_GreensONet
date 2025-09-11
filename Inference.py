@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import time
-sys.path.append("../external-libraries")
 import paddle
 import random
 import meshio
@@ -12,6 +11,7 @@ from options import Options
 from model import Net_Integral, tile
 from problem import DiffusionReaction, Poisson, Stokes
 from utils import Mesh
+sys.path.append("../external-libraries")
 
 
 def set_random_seed(seed):
@@ -208,7 +208,7 @@ class Tester():
 
 if __name__ == '__main__':
     args = Options().parse()
-    WORK_DIR = "../GON_jcp"
+    WORK_DIR = "./data"
 
     print("\n[Case 1: Heterogeneous reaction-diffusion equations] [name:Flat Plate]")
     args.pde_case = 'Diffusion'
