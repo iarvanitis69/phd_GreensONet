@@ -1,0 +1,11 @@
+model_name: GreensONet
+dataset_name: Diffusion_Pipe
+
+mode: train
+checkpoint: ""
+seed: 0
+
+input_dir: "../GON_jcp"
+output_dir: "models"
+
+device: "cpu"
