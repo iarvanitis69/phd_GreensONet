@@ -1,90 +1,97 @@
-import argparse
-import torch
 import os
-from datetime import datetime
+import sys
+import torch
+import hydra
+from omegaconf import DictConfig
 
-# -----------------------------
-# ARGUMENTS
-# -----------------------------
-def parse_args():
-    parser = argparse.ArgumentParser(description="Diffusion Plate - PyTorch")
+# Αν έχεις εξωτερικές βιβλιοθήκες
+sys.path.append("../external-libraries")
 
-    # === DEVICE: ΤΟ ΒΑΖΕΙΣ ΜΕ ΤΟ ΧΕΡΙ ===
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        choices=["cpu", "cuda"],
-        help="Επίλεξε χειροκίνητα: cpu ή cuda"
-    )
-
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--run_name", type=str, default=None)
-
-    return parser.parse_args()
+from problem import DiffusionReaction          # PyTorch version
+from trainer import Trainer                    # PyTorch version
+from inference import Tester                  # PyTorch version
 
 
 # -----------------------------
 # SEED
 # -----------------------------
-def set_seed(seed):
+def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 # -----------------------------
-# MAIN
+# MAIN (Hydra)
 # -----------------------------
-def main():
-    args = parse_args()
+@hydra.main(version_base=None, config_path="../config", config_name="diffusion_plate.yaml")
+def main(cfg):
 
-    # ✅ ΕΣΥ ΔΙΑΛΕΓΕΙΣ ΣΥΣΚΕΥΗ
-    device = torch.device(args.device)
+    # ✅ 1. Δημιουργούμε ΤΑ OBECTS ΕΚΤΟΣ cfg
+    problem = DiffusionReaction(
+        cfg.data.train_data,
+        geometry=cfg.pde.geometry
+    )
 
-    print("====================================")
-    print(f"DEVICE (χειροκίνητο): {device}")
-    print(f"SEED: {args.seed}")
-    print(f"CONFIG: {args.config}")
-    print("====================================")
+    val_problem = DiffusionReaction(
+        cfg.data.test_data,
+        geometry=cfg.pde.geometry
+    )
 
-    # Αν κάποιος βάλει CUDA χωρίς GPU → καθαρό error
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("Ζήτησες CUDA αλλά ΔΕΝ υπάρχει διαθέσιμη GPU!")
+    # ✅ 2. Δημιουργούμε ένα "args" object τύπου SimpleNamespace
+    from types import SimpleNamespace
 
-    set_seed(args.seed)
+    args = SimpleNamespace(
+        # --- device ---
+        device=cfg.device,
+        cuda_index=0,
 
-    # -----------------------------
-    # RUN FOLDER (timestamp)
-    # -----------------------------
-    if args.run_name is None:
-        run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    else:
-        run_name = args.run_name
+        # --- PDE ---
+        pde_case=cfg.pde.case,
+        geometry=cfg.pde.geometry,
+        problem=problem,
+        val_problem=val_problem,
 
-    run_dir = os.path.join("models", run_name)
-    os.makedirs(run_dir, exist_ok=True)
+        # --- Mesh ---
+        mesh_path=cfg.mesh.interior_path,
+        boundary_mesh_path=cfg.mesh.boundary_path,
+        domain=cfg.pde.domain,
+        blocks_num = cfg.mesh.blocks_num,
+        ngs_boundary=cfg.mesh.ngs_boundary,
+        ngs_interior=cfg.mesh.ngs_interior,
 
-    print(f"Run directory: {run_dir}")
+        # --- Model ---
+        layers=cfg.model.layers,
+        shape=cfg.model.shape,
+        act=cfg.model.activation,
 
-    # -----------------------------
-    # ΕΔΩ ΘΑ ΜΠΟΥΝ:
-    # - φόρτωση YAML
-    # - model = FNN(...)
-    # - trainer
-    # - tester
-    # -----------------------------
+        # --- Training ---
+        epochs_Adam=cfg.training.epochs,
+        train_samples=cfg.training.train_samples,
+        test_samples=cfg.training.test_samples,
+        lr=cfg.training.lr,
+        weight_decay=cfg.training.weight_decay,
+        lr_scheduler=cfg.training.lr_scheduler,
+        lr_scheduler_step_size=cfg.training.lr_scheduler_step_size,
 
-    # ΠΑΡΑΔΕΙΓΜΑ:
-    # model = FNN(...)
-    # model.to(device)
+        # --- Output ---
+        output_dir=cfg.output_dir,
+        save_vtk=cfg.vtk.save_vtk,
 
-    print("Training ξεκινάει...")
+        # --- Misc ---
+        resume=False,
+        tol=1e-12,
+        tol_change=0.0,
+        lam=cfg.training.lam
+    )
 
-    # trainer.train()
+    # ✅ 3. Δημιουργία Tester & Trainer
+    tester = Tester(args)
+    args.tester = tester
 
-    print("Training ολοκληρώθηκε.")
+    trainer = Trainer(args)
+    trainer.train()
+
 
 
 # -----------------------------

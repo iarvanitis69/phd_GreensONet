@@ -1,18 +1,85 @@
+# =========================================================
+# HYDRA
+# =========================================================
 hydra:
   run:
-    dir: data/output/${model_name}/${dataset_name}/${mode}/${now:%Y-%m-%d-%H-%M-%S}
+    dir: ${output_dir}/diffusion_plate/${now:%Y-%m-%d_%H-%M-%S}
   job:
-    name: ${mode}
     chdir: false
   sweep:
     dir: ${hydra.run.dir}
     subdir: ./
 
-model_name: CGF-NET
-dataset_name: Diffusion_Plate
+# =========================================================
+# ΓΕΝΙΚΑ
+# =========================================================
+mode: train
+device: cpu
+seed: 42
 
-mode: "train"
+# ✅ ΑΥΤΟ ΕΛΕΙΠΕ
+output_dir: ../data/output
+
+# =========================================================
+# DATA
+# =========================================================
+data:
+  train_data: "../data/input/data/diffusion/case1/train_data"
+  test_data: "../data/input/data/diffusion/case1/test_data"
+
+# =========================================================
+# PDE / GEOMETRY
+# =========================================================
+pde:
+  case: diffusion
+  geometry: plate
+  domain: [-1, 1, -1, 1, -1, 1]
+
+# =========================================================
+# MESH
+# =========================================================
+mesh:
+  interior_path: "../data/input/mesh/diffusion/regular_domain.mphtxt"
+  boundary_path: "../data/input/mesh/diffusion/regular_boundary.mphtxt"
+  ngs_boundary: 1
+  ngs_interior: 1
+  blocks_num: [1, 1, 1]
+
+# =========================================================
+# MODEL
+# =========================================================
+model:
+  model_name: GreensONet
+  shape: [1, 2]
+  blocks_num: [1, 1, 1]
+
+  layers:
+    - - [6, 32, 16, 8, 1]
+      - [6, 32, 16, 8, 1]
+
+  activation: sin
+
+# =========================================================
+# TRAINING
+# =========================================================
+training:
+  optimizer: Adam
+  epochs: 20
+  train_samples: 5
+  test_samples: 2
+  lr: 0.001
+  weight_decay: 0.0
+  lr_scheduler: StepDecay
+  lr_scheduler_step_size: 100
+  lam: 400.0
+
+# =========================================================
+# VTK OUTPUT
+# =========================================================
+vtk:
+  save_vtk: false
+
+# =========================================================
+# CHECKPOINT
+# =========================================================
 checkpoint: ""
-seed: 0
-input_dir: "data/input"
-output_dir: ${hydra:run.dir}
